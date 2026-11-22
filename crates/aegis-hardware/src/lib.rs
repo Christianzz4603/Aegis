@@ -128,7 +128,7 @@ fn detect_cgroup_memory_mb() -> (Option<u64>, Option<u64>) {
     let v2_limit = read_cgroup_value("/sys/fs/cgroup/memory.max")
         .as_deref().and_then(parse_cgroup_limit_mb);
     let v2_current = read_cgroup_value("/sys/fs/cgroup/memory.current")
-        .as_deref().and_then(parse_bytes_mb);
+        .as_deref().and_then(parse_cgroup_usage_mb);
 
     if v2_limit.is_some() {
         return (v2_limit, v2_limit.zip(v2_current).map(|(limit, used)| {
@@ -149,7 +149,7 @@ fn detect_cgroup_memory_mb() -> (Option<u64>, Option<u64>) {
         "/dev/memcg/memory.usage_in_bytes",
     ]
     .into_iter()
-    .find_map(|path| read_cgroup_value(path).as_deref().and_then(parse_bytes_mb));
+    .find_map(|path| read_cgroup_value(path).as_deref().and_then(parse_cgroup_usage_mb));
 
     (limit, limit.zip(current).map(|(limit, used)| limit.saturating_sub(used)))
 }
@@ -179,6 +179,10 @@ fn parse_cgroup_limit_mb(value: &str) -> Option<u64> {
 
 fn parse_bytes_mb(bytes: u64) -> Option<u64> {
     Some(bytes / 1_048_576)
+}
+
+fn parse_cgroup_usage_mb(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok().and_then(parse_bytes_mb)
 }
 
 fn combine_memory(
@@ -226,6 +230,12 @@ mod tests {
         assert_eq!(parse_cgroup_limit_mb("1073741824"), Some(1_024));
         assert_eq!(parse_cgroup_limit_mb("max"), None);
         assert_eq!(parse_cgroup_limit_mb("9223372036854771712"), None);
+    }
+
+    #[test]
+    fn parses_cgroup_usage_values_in_bytes() {
+        assert_eq!(parse_cgroup_usage_mb("536870912"), Some(512));
+        assert_eq!(parse_cgroup_usage_mb("not-a-number"), None);
     }
 
     #[test]
