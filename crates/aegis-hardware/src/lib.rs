@@ -1,7 +1,8 @@
 //! Lightweight, dependency-free hardware profiling for adaptive local inference.
 //!
-//! Detection is intentionally conservative: unknown platform memory is left as
-//! unknown rather than guessed. Linux and Android use /proc/meminfo.
+//! Memory figures are conservative estimates. On Linux/Android, Aegis combines
+//! host memory information with cgroup limits when those limits are readable.
+//! A model must still be checked against the selected runtime's measured needs.
 
 use std::{env, fs, thread};
 
@@ -35,8 +36,7 @@ pub struct HardwareProfile {
     pub available_memory_mb: Option<u64>,
     pub resource_tier: ResourceTier,
     pub recommended_context_tokens: u32,
-    /// Initial conservative budget for model weights, not a guarantee that a
-    /// particular model will load or perform well.
+    /// Initial budget estimate for model weights, not a model-fit guarantee.
     pub model_memory_budget_mb: Option<u64>,
 }
 
@@ -51,7 +51,11 @@ impl HardwareProfile {
             ResourceTier::HighMemory => 16_384,
             ResourceTier::Unknown => 4_096,
         };
-        let model_memory_budget_mb = available_memory_mb.map(|available| available * 55 / 100);
+
+        // Keep 512 MiB for the OS, the agent, and other applications before
+        // assigning a conservative fraction of the remainder to model weights.
+        let model_memory_budget_mb =
+            available_memory_mb.map(|available| available.saturating_sub(512) * 55 / 100);
 
         Self {
             architecture: env::consts::ARCH,
@@ -80,26 +84,13 @@ fn classify(available_mb: Option<u64>) -> ResourceTier {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn detect_memory_mb() -> (Option<u64>, Option<u64>) {
-    let Ok(contents) = fs::read_to_string("/proc/meminfo") else {
-        return (None, None);
-    };
+    let host = fs::read_to_string("/proc/meminfo")
+        .ok()
+        .map(|contents| parse_meminfo(&contents))
+        .unwrap_or((None, None));
 
-    let mut total = None;
-    let mut available = None;
-    for line in contents.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(key) = fields.next() else { continue };
-        let Some(value) = fields.next().and_then(|v| v.parse::<u64>().ok()) else {
-            continue;
-        };
-        // /proc/meminfo reports these values in KiB.
-        match key {
-            "MemTotal:" => total = Some(value / 1024),
-            "MemAvailable:" => available = Some(value / 1024),
-            _ => {}
-        }
-    }
-    (total, available)
+    let cgroup = detect_cgroup_memory_mb();
+    combine_memory(host, cgroup)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -107,12 +98,116 @@ fn detect_memory_mb() -> (Option<u64>, Option<u64>) {
     (None, None)
 }
 
+fn parse_meminfo(contents: &str) -> (Option<u64>, Option<u64>) {
+    let mut total = None;
+    let mut available = None;
+
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(key) = fields.next() else {
+            continue;
+        };
+        let Some(value) = fields.next().and_then(|value| value.parse::<u64>().ok()) else {
+            continue;
+        };
+
+        // Linux /proc/meminfo reports these values in KiB.
+        match key {
+            "MemTotal:" => total = Some(value / 1_024),
+            "MemAvailable:" => available = Some(value / 1_024),
+            _ => {}
+        }
+    }
+
+    (total, available)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn detect_cgroup_memory_mb() -> (Option<u64>, Option<u64>) {
+    // cgroup v2
+    let v2_limit = read_cgroup_value("/sys/fs/cgroup/memory.max")
+        .and_then(parse_cgroup_limit_mb);
+    let v2_current = read_cgroup_value("/sys/fs/cgroup/memory.current")
+        .and_then(parse_bytes_mb);
+
+    if v2_limit.is_some() {
+        return (v2_limit, v2_limit.zip(v2_current).map(|(limit, used)| {
+            limit.saturating_sub(used)
+        }));
+    }
+
+    // cgroup v1, including the common Android memory-controller mount.
+    let limit = [
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        "/dev/memcg/memory.limit_in_bytes",
+    ]
+    .into_iter()
+    .find_map(|path| read_cgroup_value(path).and_then(parse_cgroup_limit_mb));
+
+    let current = [
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+        "/dev/memcg/memory.usage_in_bytes",
+    ]
+    .into_iter()
+    .find_map(|path| read_cgroup_value(path).and_then(parse_bytes_mb));
+
+    (limit, limit.zip(current).map(|(limit, used)| limit.saturating_sub(used)))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn detect_cgroup_memory_mb() -> (Option<u64>, Option<u64>) {
+    (None, None)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_cgroup_value(path: &str) -> Option<String> {
+    fs::read_to_string(path).ok().map(|value| value.trim().to_owned())
+}
+
+fn parse_cgroup_limit_mb(value: &str) -> Option<u64> {
+    if value == "max" {
+        return None;
+    }
+
+    let bytes = value.parse::<u64>().ok()?;
+    // cgroup v1 commonly uses a very large number to mean "unlimited".
+    if bytes >= (1_u64 << 60) {
+        return None;
+    }
+    parse_bytes_mb(bytes)
+}
+
+fn parse_bytes_mb(bytes: u64) -> Option<u64> {
+    Some(bytes / 1_048_576)
+}
+
+fn combine_memory(
+    host: (Option<u64>, Option<u64>),
+    cgroup: (Option<u64>, Option<u64>),
+) -> (Option<u64>, Option<u64>) {
+    let total = match (host.0, cgroup.0) {
+        (Some(host), Some(limit)) => Some(host.min(limit)),
+        (Some(host), None) => Some(host),
+        (None, Some(limit)) => Some(limit),
+        (None, None) => None,
+    };
+
+    let available = match (host.1, cgroup.1.or(cgroup.0)) {
+        (Some(host), Some(limit_or_remaining)) => Some(host.min(limit_or_remaining)),
+        (Some(host), None) => Some(host),
+        (None, Some(limit_or_remaining)) => Some(limit_or_remaining),
+        (None, None) => None,
+    };
+
+    (total, available)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn memory_tiers_are_conservative() {
+    fn resource_tiers_are_conservative() {
         assert_eq!(classify(Some(512)), ResourceTier::Tiny);
         assert_eq!(classify(Some(2_048)), ResourceTier::Constrained);
         assert_eq!(classify(Some(6_000)), ResourceTier::Standard);
@@ -121,7 +216,39 @@ mod tests {
     }
 
     #[test]
+    fn parses_linux_meminfo_in_kibibytes() {
+        let input = "MemTotal:       4194304 kB\nMemAvailable:   2097152 kB\n";
+        assert_eq!(parse_meminfo(input), (Some(4_096), Some(2_048)));
+    }
+
+    #[test]
+    fn parses_cgroup_limits_and_unlimited_values() {
+        assert_eq!(parse_cgroup_limit_mb("1073741824"), Some(1_024));
+        assert_eq!(parse_cgroup_limit_mb("max"), None);
+        assert_eq!(parse_cgroup_limit_mb("9223372036854771712"), None);
+    }
+
+    #[test]
+    fn cgroup_limit_caps_host_memory() {
+        assert_eq!(
+            combine_memory((Some(8_192), Some(6_000)), (Some(2_048), Some(1_024))),
+            (Some(2_048), Some(1_024))
+        );
+    }
+
+    #[test]
     fn profile_has_at_least_one_worker() {
         assert!(HardwareProfile::detect().logical_cores >= 1);
+    }
+
+    #[test]
+    fn model_budget_reserves_headroom() {
+        let profile = HardwareProfile::detect();
+        if let Some(available) = profile.available_memory_mb {
+            assert_eq!(
+                profile.model_memory_budget_mb,
+                Some(available.saturating_sub(512) * 55 / 100)
+            );
+        }
     }
 }
