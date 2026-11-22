@@ -126,9 +126,9 @@ fn parse_meminfo(contents: &str) -> (Option<u64>, Option<u64>) {
 fn detect_cgroup_memory_mb() -> (Option<u64>, Option<u64>) {
     // cgroup v2
     let v2_limit = read_cgroup_value("/sys/fs/cgroup/memory.max")
-        .and_then(parse_cgroup_limit_mb);
+        .as_deref().and_then(parse_cgroup_limit_mb);
     let v2_current = read_cgroup_value("/sys/fs/cgroup/memory.current")
-        .and_then(parse_bytes_mb);
+        .as_deref().and_then(parse_bytes_mb);
 
     if v2_limit.is_some() {
         return (v2_limit, v2_limit.zip(v2_current).map(|(limit, used)| {
@@ -142,14 +142,14 @@ fn detect_cgroup_memory_mb() -> (Option<u64>, Option<u64>) {
         "/dev/memcg/memory.limit_in_bytes",
     ]
     .into_iter()
-    .find_map(|path| read_cgroup_value(path).and_then(parse_cgroup_limit_mb));
+    .find_map(|path| read_cgroup_value(path).as_deref().and_then(parse_cgroup_limit_mb));
 
     let current = [
         "/sys/fs/cgroup/memory/memory.usage_in_bytes",
         "/dev/memcg/memory.usage_in_bytes",
     ]
     .into_iter()
-    .find_map(|path| read_cgroup_value(path).and_then(parse_bytes_mb));
+    .find_map(|path| read_cgroup_value(path).as_deref().and_then(parse_bytes_mb));
 
     (limit, limit.zip(current).map(|(limit, used)| limit.saturating_sub(used)))
 }
