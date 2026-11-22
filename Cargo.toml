@@ -3,9 +3,16 @@ resolver = "2"
 members = [
     "crates/aegis-core",
     "crates/aegis-cli",
+    "crates/aegis-hardware",
 ]
 
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
 authors = ["Aegis contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"

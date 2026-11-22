@@ -8,7 +8,7 @@ approval_mode = "ask"
 backend = "llama.cpp"
 format = "gguf"
 model_path = "models/aegis-model.gguf"
-context_length = 16384
+context_length = 4096
 gpu_layers = "auto"
 
 [runtime]
@@ -16,3 +16,9 @@ mode = "local"
 working_directory = "."
 require_approval_for_destructive_actions = true
 allow_network = false
+
+[adaptive]
+enabled = true
+profile = "auto"
+reserve_memory_mb = 512
+max_context_length = 16384

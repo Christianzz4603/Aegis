@@ -7,26 +7,54 @@ pub struct AegisConfig {
     pub agent: AgentConfig,
     pub model: ModelConfig,
     pub runtime: RuntimeConfig,
+    #[serde(default)]
+    pub adaptive: AdaptiveConfig,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AgentConfig {
     pub name: String,
     pub max_tool_rounds: u32,
+    pub approval_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ModelConfig {
-    pub provider: String,
-    pub model_id: String,
-    pub base_url: String,
-    pub api_key_env: Option<String>,
+    /// Local inference backend, for example "bitnet" or "llama.cpp".
+    pub backend: String,
+    pub format: String,
+    pub model_path: String,
+    pub context_length: u32,
+    /// "auto" or a backend-specific layer count.
+    pub gpu_layers: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RuntimeConfig {
     pub mode: String,
+    pub working_directory: String,
     pub require_approval_for_destructive_actions: bool,
+    pub allow_network: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct AdaptiveConfig {
+    pub enabled: bool,
+    pub profile: String,
+    pub reserve_memory_mb: u64,
+    pub max_context_length: u32,
+}
+
+impl Default for AdaptiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            profile: "auto".into(),
+            reserve_memory_mb: 512,
+            max_context_length: 16_384,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -54,11 +82,14 @@ impl AegisConfig {
         if self.agent.max_tool_rounds == 0 {
             return Err(ConfigError::Invalid("agent.max_tool_rounds must be greater than zero".into()));
         }
-        if self.model.model_id.trim().is_empty() {
-            return Err(ConfigError::Invalid("model.model_id cannot be empty".into()));
+        if self.model.backend.trim().is_empty() || self.model.model_path.trim().is_empty() {
+            return Err(ConfigError::Invalid("model.backend and model.model_path are required".into()));
         }
-        if !(self.model.base_url.starts_with("http://") || self.model.base_url.starts_with("https://")) {
-            return Err(ConfigError::Invalid("model.base_url must use http:// or https://".into()));
+        if self.model.context_length == 0 || self.adaptive.max_context_length == 0 {
+            return Err(ConfigError::Invalid("context lengths must be greater than zero".into()));
+        }
+        if self.runtime.mode != "local" {
+            return Err(ConfigError::Invalid("only local runtime mode is supported".into()));
         }
         Ok(())
     }
@@ -69,20 +100,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_is_valid() {
-        let config = AegisConfig {
-            agent: AgentConfig { name: "Aegis".into(), max_tool_rounds: 12 },
-            model: ModelConfig {
-                provider: "openai-compatible".into(),
-                model_id: "lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled".into(),
-                base_url: "http://127.0.0.1:8000/v1".into(),
-                api_key_env: None,
-            },
-            runtime: RuntimeConfig {
-                mode: "local".into(),
-                require_approval_for_destructive_actions: true,
-            },
-        };
-        assert!(config.validate().is_ok());
+    fn default_config_parses_and_validates() {
+        let source = include_str!("../../../config/default.toml");
+        let config: AegisConfig = toml::from_str(source).expect("default TOML parses");
+        config.validate().expect("default config is valid");
+        assert!(config.adaptive.enabled);
+        assert!(!config.runtime.allow_network);
     }
 }
