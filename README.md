@@ -2,56 +2,81 @@
 
 **Autonomous Engineering & General Intelligence System**
 
-Aegis is a modular, Rust-first AI engineering agent. It uses existing AI models through provider adapters and orchestrates development and analysis tools through a permissioned runtime. It does not train a foundation model from scratch.
+Aegis is a local-first, terminal-based AI coding and engineering agent, written primarily in Rust. Its goal is to provide a Codex/Claude Code-style workflow while running an open-weight language model on the same machine as the CLI.
 
-## Current status
+## Non-negotiable project direction
 
-Early project scaffold. This commit establishes the Rust workspace, configuration model, and model provenance. Agent planning, inference, tool adapters, and execution backends are not implemented yet.
+- **Local inference only:** no hosted AI providers, remote inference APIs, or API keys.
+- **Terminal-native:** Aegis is a CLI coding agent that works in the user's current project directory.
+- **Existing model:** use an existing open-weight model; do not train a foundation model from scratch.
+- **Rust-first:** agent loop, terminal UX, project context, permissions, and tool orchestration belong in Rust.
+- **Local tools:** inspect files, search code, edit files, run builds and tests, and use installed developer tools with explicit permissions.
+- **Optional Code Mode:** Cloudflare Code Mode may be explored for local code orchestration only if it can preserve the local-only privacy boundary. It is not required and must never send source code or prompts to a hosted model.
+- **No mandatory MCP:** use native Rust tool adapters and compact capability discovery.
 
 ## Initial model
 
-Aegis is configured to target:
+Aegis initially targets:
 
-- **Model:** [lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled](https://huggingface.co/lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled)
+- **Checkpoint:** [lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled](https://huggingface.co/lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled)
 - **Base:** Qwen/Qwen3.6-35B-A3B
-- **Format:** Transformers / Safetensors
-- **Upstream license:** Apache-2.0 (verify the model card and license before redistribution)
-- **Training provenance:** The model card describes supervised fine-tuning using the public reasoning-distillation dataset listed below.
+- **Upstream format:** Transformers / BF16 Safetensors
+- **Upstream repository size:** approximately 45.7 GB
+- **License shown on model card:** Apache-2.0 (check upstream terms before redistributing)
+- **GGUF quantizations:** the model author documents community GGUF variants, including an IQ4_XS build around 18.9 GB.
 
-The checkpoint is approximately **45.7 GB**. Model weights are deliberately **not** stored in this GitHub repository. GitHub source control is for Aegis code and configuration; obtain model weights directly from Hugging Face when setting up a suitable inference host. The checkpoint is too large for ordinary Git commits and would make the source repository cumbersome.
+This is a Qwen checkpoint fine-tuned on reasoning examples attributed by its author to Claude Opus 4.7. It is not Claude Opus or an Anthropic model.
 
-Related upstream resources:
+### Model storage is local
+
+The model is downloaded to the same computer that runs Aegis and is loaded by a local inference engine. The weights are not copied into this GitHub repository and are not sent to a remote inference provider.
+
+The 45.7 GB figure is the upstream BF16 checkpoint's download/storage size, not a server requirement or an API charge. Quantized GGUF files are smaller, but the model still needs substantial memory bandwidth and RAM/VRAM to run well. Only about 3B parameters are active per token; that reduces compute per token, but does not mean the entire 35B model can fit in 3B worth of memory.
+
+Aegis must detect available system resources and explain whether the selected model is practical before downloading or loading it. Smaller local models should also be supported.
+
+Related resources:
 
 - [Model checkpoint and model card](https://huggingface.co/lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled)
+- [Model GGUF quantization information](https://huggingface.co/lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-Q8_0-GGUF)
 - [Base model](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)
-- [SFT dataset](https://huggingface.co/datasets/lordx64/reasoning-distill-opus-4-7-max-sft)
-- [Source reasoning dataset](https://huggingface.co/datasets/lordx64/reasoning-distill-claude-opus-4-7-max)
 
-This is a Qwen model fine-tuned on reasoning examples attributed by its author to Claude Opus 4.7. It is **not Claude Opus**, and its performance should be evaluated independently.
+## Product behavior
 
-## Design principles
+Aegis should feel like a terminal coding agent:
 
-- Rust-first agent core.
-- Existing models through replaceable provider adapters.
-- Local-first execution, with optional cloud backends.
-- No mandatory MCP dependency.
-- Cloudflare Code Mode can be an optional orchestration backend, not a hard dependency.
-- Progressive tool discovery and compact tool results.
-- Explicit permissions, bounded execution, and approval for destructive actions.
-- Model weights stay outside the source repository.
+1. Start in a repository or project directory.
+2. Read project instructions and inspect relevant files.
+3. Build a plan for the requested task.
+4. Show proposed tool actions and request approval when appropriate.
+5. Edit files and run local commands.
+6. Inspect command output, tests, and diffs.
+7. Iterate until the task is complete or explain what is blocked.
 
-## Workspace
+It must not silently perform destructive operations. Shell execution should be bounded, visible, cancellable, and permission-controlled.
+
+## Architecture
 
 ```text
 crates/
-  aegis-core/   Shared configuration and core types
-  aegis-cli/    Initial command-line application
+  aegis-cli/       Terminal application and interactive session
+  aegis-core/      Agent loop, messages, task state
+  aegis-model/     Local model runtime abstraction
+  aegis-context/   Project discovery and context assembly
+  aegis-tools/     Filesystem, search, patch, shell, git tools
+  aegis-policy/    Approvals, allowlists, limits
+  aegis-memory/    Local project/session memory
+  aegis-tui/       Terminal UI
 config/
-  default.toml  Default model and runtime configuration
+  default.toml
 docs/
   architecture.md
   model.md
 ```
+
+## Current status
+
+Early scaffold. The initial Rust workspace, CLI, TOML configuration, and model provenance are committed. Local model inference, interactive agent loop, editing tools, terminal UI, and approval workflow are not implemented yet.
 
 ## Build
 
@@ -64,8 +89,8 @@ cargo run -p aegis-cli -- about
 cargo run -p aegis-cli -- check-config --config config/default.toml
 ```
 
-The initial CLI validates configuration only. It does not download model weights, start an inference server, or execute system tools.
+The current CLI validates configuration only. It does not yet download or run a model, edit files, or execute shell commands.
 
 ## License
 
-Aegis's project license has not yet been selected. The upstream model's license applies to that model, not automatically to Aegis source code.
+Aegis's source-code license has not yet been selected. The upstream model's license applies to that model, not automatically to Aegis source code.

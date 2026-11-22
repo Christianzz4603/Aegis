@@ -1,15 +1,18 @@
 [agent]
 name = "Aegis"
-max_tool_rounds = 12
+max_tool_rounds = 24
+approval_mode = "ask"
 
 [model]
-# OpenAI-compatible inference server. Start a compatible server separately.
-provider = "openai-compatible"
-model_id = "lordx64/Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled"
-base_url = "http://127.0.0.1:8000/v1"
-# Set this only if your inference server requires an API key.
-# api_key_env = "AEGIS_MODEL_API_KEY"
+# Local model files only. No hosted provider or remote inference endpoint.
+backend = "llama.cpp"
+format = "gguf"
+model_path = "models/aegis-model.gguf"
+context_length = 16384
+gpu_layers = "auto"
 
 [runtime]
 mode = "local"
+working_directory = "."
 require_approval_for_destructive_actions = true
+allow_network = false
