@@ -1,34 +1,73 @@
 name: Rust CI
-
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: rust-ci-${{ github.ref }}
+  group: aegis-ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   test:
-    name: Test and build
+    name: Test workspace
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run workspace tests
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate dependency lockfile
+        run: cargo generate-lockfile
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run tests
         run: cargo test --workspace --locked
-
       - name: Build workspace
         run: cargo build --workspace --locked
+  binaries:
+    name: Build ${{ matrix.name }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: aegis
+            suffix: ""
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: aegis.exe
+            suffix: ".exe"
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: aegis
+            suffix: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate dependency lockfile
+        run: cargo generate-lockfile
+      - name: Build standalone release binary
+        run: cargo build --release --locked --package aegis-cli --target ${{ matrix.target }}
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/aegis-${{ matrix.target }}${{ matrix.suffix }}"
+      - name: Upload standalone binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
