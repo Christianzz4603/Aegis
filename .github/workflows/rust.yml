@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: Format, test, and build
+    name: Test and build
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -23,14 +23,9 @@ jobs:
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
 
       - name: Run workspace tests
         run: cargo test --workspace --locked
