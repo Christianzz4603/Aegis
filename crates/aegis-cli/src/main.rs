@@ -9,7 +9,7 @@ use std::{
         Arc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 const DEFAULT_CONFIG: &str = include_str!("../../../config/default.toml");
@@ -130,11 +130,12 @@ fn spinner(label: &str, duration: Duration) {
     let active = Arc::new(AtomicBool::new(true));
     let thread_active = Arc::clone(&active);
     let label = label.to_owned();
+    let thread_label = label.clone();
     let worker = thread::spawn(move || {
         let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let mut index = 0;
         while thread_active.load(Ordering::Relaxed) {
-            print!("\r{} {}", blue(frames[index % frames.len()].to_owned().as_str()), muted(&label));
+            print!("\r{} {}", blue(frames[index % frames.len()].to_owned().as_str()), muted(&thread_label));
             let _ = io::stdout().flush();
             index += 1;
             thread::sleep(Duration::from_millis(75));
