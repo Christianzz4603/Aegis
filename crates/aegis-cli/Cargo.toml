@@ -13,3 +13,4 @@ path = "src/main.rs"
 aegis-core = { path = "../aegis-core" }
 aegis-hardware = { path = "../aegis-hardware" }
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
